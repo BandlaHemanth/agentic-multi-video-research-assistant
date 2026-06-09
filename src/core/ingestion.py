@@ -259,6 +259,17 @@ def download_youtube_audio(video_id: str, progress_callback=None) -> Path:
             ydl.download([url])
         except Exception as e:
             logger.error(f"Failed to download audio via yt-dlp: {e}")
+            err_msg = str(e)
+            err_lower = err_msg.lower()
+            if any(k in err_lower for k in ["403", "forbidden", "unauthorized", "sign in", "confirm your age", "bot", "block", "captcha"]):
+                raise RuntimeError(
+                    "YouTube blocked the audio download request. "
+                    "Cloud hosting environments (like Streamlit Community Cloud or Render) "
+                    "are frequently blocked by YouTube's security measures. "
+                    "Please note that videos with existing transcripts (manual or auto-generated) "
+                    "will still ingest and index normally in this environment. "
+                    "To use the Whisper ASR fallback on videos without captions, run the application locally."
+                ) from e
             raise RuntimeError(f"Audio download failed: {e}") from e
             
     audio_file = audio_dir / f"{video_id}.mp3"
@@ -445,6 +456,9 @@ def fetch_video_transcript(video_id: str, progress_callback=None) -> Tuple[List[
             
         except Exception as fallback_err:
             logger.error(f"Whisper fallback transcription failed: {fallback_err}")
+            err_str = str(fallback_err)
+            if "YouTube blocked the audio download" in err_str:
+                raise fallback_err
             raise RuntimeError(f"ASR fallback failed: {fallback_err}") from fallback_err
         finally:
             if audio_path and audio_path.exists():
