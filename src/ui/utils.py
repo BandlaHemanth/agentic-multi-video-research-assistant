@@ -7,7 +7,7 @@ and session state status helper checks.
 import re
 import time
 import logging
-from typing import Dict, Generator, Optional, Any
+from typing import List, Dict, Generator, Optional, Any
 from src.core.rag import format_time
 
 logger = logging.getLogger(__name__)

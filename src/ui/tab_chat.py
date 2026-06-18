@@ -155,15 +155,28 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
         triggered_query = st.session_state.pop("trigger_query", None)
         user_input = st.chat_input("Ask about the indexed videos...")
         
+        # Logging: Chat input received or restored after rerun
+        if user_input:
+            logger.info(f"[DEBUG] Chat input received directly: '{user_input}'")
+            print(f"[DEBUG] Chat input received directly: '{user_input}'")
+        if triggered_query:
+            logger.info(f"[DEBUG] Query restored after rerun: '{triggered_query}'")
+            print(f"[DEBUG] Query restored after rerun: '{triggered_query}'")
+
         active_input = triggered_query or user_input
         
         if active_input:
-            # If new chat query entered, append to state
+            # If new chat query entered, append to state and store in trigger_query for the rerun
             if not triggered_query:
+                logger.info(f"[DEBUG] New query received, storing in session_state and calling st.rerun(): '{active_input}'")
+                print(f"[DEBUG] New query received, storing in session_state and calling st.rerun(): '{active_input}'")
                 st.session_state.chat_history.append({"role": "user", "content": active_input})
                 st.session_state["trigger_query"] = active_input
                 st.rerun()
             else:
+                logger.info(f"[DEBUG] Starting chat execution workflow for query: '{active_input}'")
+                print(f"[DEBUG] Starting chat execution workflow for query: '{active_input}'")
+                
                 # Running a triggered/regenerated query
                 # Render User bubble
                 st.markdown(f'''
@@ -178,6 +191,8 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
                 # Check empty database
                 if not rag_manager.chunks:
                     error_msg = "⚠️ The search index is currently empty. Please index a YouTube video or playlist in the sidebar first."
+                    logger.warning("[DEBUG] Search index is empty. Directing user to index a video first.")
+                    print("[DEBUG] Search index is empty. Directing user to index a video first.")
                     st.markdown(f'''
                     <div class="chat-message-row assistant-row">
                         <div style="margin-right: 0.5rem; font-size: 1.25rem;">🤖</div>
@@ -192,7 +207,14 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
                 # Execute agent
                 with st.spinner("Assistant is searching transcripts and reasoning..."):
                     try:
+                        logger.info(f"[DEBUG] Agent execution started for query: '{active_input}'")
+                        print(f"[DEBUG] Agent execution started for query: '{active_input}'")
+                        
                         result: AgentExecutionResult = agent.run(active_input)
+                        
+                        logger.info(f"[DEBUG] Agent execution completed successfully. Formatting response...")
+                        print(f"[DEBUG] Agent execution completed successfully. Formatting response...")
+                        
                         clean_answer = result.answer
                         
                         # Streaming display container
@@ -220,12 +242,18 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
                             "trace_steps": [ts.__dict__ for ts in result.trace_steps],
                             "retrieved_chunks": [c.__dict__ for c in result.retrieved_chunks]
                         })
+                        
+                        logger.info(f"[DEBUG] Response returned to UI. Rerunning page to lock in chat history...")
+                        print(f"[DEBUG] Response returned to UI. Rerunning page to lock in chat history...")
                         st.rerun()
                     except Exception as e:
-                        error_str = f"An error occurred: {e}"
-                        st.error(error_str)
-                        st.session_state.chat_history.append({"role": "assistant", "content": error_str})
-                        logger.error(f"Agent execution error: {e}", exc_info=True)
+                        import traceback
+                        tb_str = traceback.format_exc()
+                        logger.critical(f"[DEBUG] Critical error in chat execution flow: {e}\n{tb_str}")
+                        print(f"[DEBUG] Critical error in chat execution flow: {e}\n{tb_str}")
+                        st.error(f"❌ A critical error occurred in the chat assistant:")
+                        st.exception(e)
+                        st.session_state.chat_history.append({"role": "assistant", "content": f"An error occurred: {e}"})
 
     # ────────────────────────────────────────────────────────────────
     # RIGHT COLUMN: DEDICATED EXECUTION TRACE PANEL (LIGHT THEME)

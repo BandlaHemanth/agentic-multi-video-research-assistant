@@ -48,16 +48,26 @@ sidebar_opts = render_sidebar(rag_manager)
 active_key = sidebar_opts["api_key"]
 
 # 5. Sync API key changes dynamically to environment variables and clients
+import logging
+logger = logging.getLogger(__name__)
 if active_key:
+    logger.info(f"[DEBUG] Syncing active key ({st.session_state.get('active_key_source', 'unknown source')}) globally.")
+    print(f"[DEBUG] Syncing active key ({st.session_state.get('active_key_source', 'unknown source')}) globally.")
     os.environ["GOOGLE_API_KEY"] = active_key
     import google.generativeai as genai
     genai.configure(api_key=active_key)
     try:
         agent.client = google_genai.Client(api_key=active_key)
+        logger.info("[DEBUG] google.genai Client configured successfully.")
+        print("[DEBUG] google.genai Client configured successfully.")
     except Exception as e:
+        logger.error(f"[DEBUG] Failed to configure Gemini Client: {e}")
+        print(f"[DEBUG] Failed to configure Gemini Client: {e}")
         st.sidebar.error(f"Failed to configure Gemini Client: {e}")
         agent.client = None
 else:
+    logger.warning("[DEBUG] No active API key found. Clearing environment and client.")
+    print("[DEBUG] No active API key found. Clearing environment and client.")
     if "GOOGLE_API_KEY" in os.environ:
         del os.environ["GOOGLE_API_KEY"]
     agent.client = None

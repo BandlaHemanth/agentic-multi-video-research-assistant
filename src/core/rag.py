@@ -515,14 +515,22 @@ class HybridRAGManager:
         start_time = time.time()
         
         # 1. Hybrid Search
+        logger.info(f"[DEBUG] Hybrid Search starting for query: '{query}'...")
+        print(f"[DEBUG] Hybrid Search starting for query: '{query}'...")
         hybrid_start = time.time()
         hybrid_candidates = self.hybrid_search(query, alpha=alpha, top_k=FINAL_CANDIDATES)
         hybrid_latency = (time.time() - hybrid_start) * 1000
+        logger.info(f"[DEBUG] Hybrid Search completed: found {len(hybrid_candidates)} candidates in {hybrid_latency:.2f}ms.")
+        print(f"[DEBUG] Hybrid Search completed: found {len(hybrid_candidates)} candidates in {hybrid_latency:.2f}ms.")
         
         # 2. Reranking
+        logger.info(f"[DEBUG] Reranking starting with cross-encoder: {RERANK_MODEL}...")
+        print(f"[DEBUG] Reranking starting with cross-encoder: {RERANK_MODEL}...")
         rerank_start = time.time()
         reranked = self.rerank(query, hybrid_candidates, top_k=limit)
         rerank_latency = (time.time() - rerank_start) * 1000
+        logger.info(f"[DEBUG] Reranking completed in {rerank_latency:.2f}ms. Top {len(reranked)} chunks selected.")
+        print(f"[DEBUG] Reranking completed in {rerank_latency:.2f}ms. Top {len(reranked)} chunks selected.")
         
         total_latency = (time.time() - start_time) * 1000
         

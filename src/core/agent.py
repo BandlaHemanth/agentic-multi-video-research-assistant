@@ -298,9 +298,12 @@ class VideoResearchAgent:
         step_idx = 1
         
         while step_idx <= max_iterations:
-            logger.info(f"Running ReAct Loop Step {step_idx}...")
+            logger.info(f"[DEBUG] Running ReAct Loop Step {step_idx}...")
+            print(f"[DEBUG] Running ReAct Loop Step {step_idx}...")
             
             try:
+                logger.info(f"[DEBUG] Gemini generation started for Step {step_idx} using model: {GEMINI_LLM_MODEL}...")
+                print(f"[DEBUG] Gemini generation started for Step {step_idx} using model: {GEMINI_LLM_MODEL}...")
                 # Call Gemini model
                 response = self.call_with_retry(
                     self.client.models.generate_content,
@@ -308,6 +311,8 @@ class VideoResearchAgent:
                     contents=messages,
                     config=config
                 )
+                logger.info(f"[DEBUG] Gemini generation completed for Step {step_idx} successfully.")
+                print(f"[DEBUG] Gemini generation completed for Step {step_idx} successfully.")
             except Exception as e:
                 err_str = str(e)
                 is_rate_limit = "RESOURCE_EXHAUSTED" in err_str or "429" in err_str or "quota" in err_str.lower()
