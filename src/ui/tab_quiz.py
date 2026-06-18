@@ -138,8 +138,11 @@ Transcript:
 {transcript[:8000]}
 """
     try:
+        client = agent._get_client()
+        if client is None:
+            raise ValueError("Gemini API client not initialized.")
         response = agent.call_with_retry(
-            agent.client.models.generate_content,
+            client.models.generate_content,
             model=GEMINI_LLM_MODEL,
             contents=prompt
         )
@@ -206,7 +209,7 @@ def render_quiz_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager):
                 video_chunks = [c for c in rag_manager.chunks if c.video_id == selected_id]
                 full_transcript = " ".join([c.text for c in video_chunks])
                 
-                if not agent.client or "ySEx" in selected_id or not full_transcript:
+                if not agent._get_client() or "ySEx" in selected_id or not full_transcript:
                     questions = DEFAULT_QUIZ_QUESTIONS.get(difficulty, DEFAULT_QUIZ_QUESTIONS["Easy"])
                 else:
                     questions = generate_quiz_from_llm(agent, title, full_transcript, difficulty)

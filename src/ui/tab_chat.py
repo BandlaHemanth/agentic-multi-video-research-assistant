@@ -66,6 +66,7 @@ def _execute_query(query: str, agent: VideoResearchAgent, rag_manager: HybridRAG
     Core execution path shared by new prompts and regeneration.
     Runs agent.run(), streams the response, appends to chat_history, then reruns.
     """
+    _log("CHECKPOINT 4: First line inside _execute_query() [PASS]", f"query={query[:50]}")
     # Guard: empty index
     if not rag_manager.chunks:
         _log("EMPTY INDEX", "No chunks — telling user to index a video first")
@@ -82,6 +83,7 @@ def _execute_query(query: str, agent: VideoResearchAgent, rag_manager: HybridRAG
     _log("agent.run() ENTER", f"query='{query[:80]}', chunks={len(rag_manager.chunks)}")
     run_start = time.time()
 
+    _log("CHECKPOINT 5: Immediately before st.spinner(...) [PASS]")
     with st.spinner("Assistant is searching transcripts and reasoning..."):
         try:
             result: AgentExecutionResult = agent.run(query)
@@ -126,12 +128,11 @@ def _execute_query(query: str, agent: VideoResearchAgent, rag_manager: HybridRAG
             elapsed = time.time() - run_start
             _log("EXCEPTION", f"elapsed={elapsed:.2f}s\n{full_tb}")
             logger.critical(f"[CRITICAL] Chat execution failed:\n{full_tb}")
-            st.error("❌ A critical error occurred in the chat assistant:")
-            st.exception(e)
             st.session_state.chat_history.append({
                 "role": "assistant",
-                "content": f"An error occurred: {e}"
+                "content": f"❌ An error occurred: {e}"
             })
+            st.rerun()
 
 
 def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, api_key: str):
@@ -242,15 +243,18 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
         # ─────────────────────────────────────────────────────────────
         # 5. Handle new user input — no trigger_query, no extra rerun
         # ─────────────────────────────────────────────────────────────
+        _log("CHECKPOINT 1: Before if prompt: [PASS]")
         prompt = st.chat_input("Ask about the indexed videos...")
 
         if prompt:
+            _log("CHECKPOINT 2: Inside if prompt: immediately after it is entered [PASS]", f"prompt={prompt[:50]}")
             _log("NEW PROMPT", f"'{prompt[:80]}'")
 
             # Immediately append user message to history
             st.session_state.chat_history.append({"role": "user", "content": prompt})
 
             # Execute in the same cycle
+            _log("CHECKPOINT 3: Immediately before _execute_query(prompt, agent, rag_manager) [PASS]")
             _execute_query(prompt, agent, rag_manager)
             # _execute_query calls st.rerun() on success, so we won't reach here
 
