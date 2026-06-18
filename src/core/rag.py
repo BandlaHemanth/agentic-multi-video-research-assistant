@@ -14,7 +14,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from rank_bm25 import BM25Okapi
-import google.generativeai as genai
+import google.genai as genai
 
 from config import (
     GOOGLE_API_KEY,
@@ -38,11 +38,19 @@ from src.core.models import TranscriptSegment, VideoData, RetrievalChunk
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Configure Gemini Generative AI
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-else:
-    logger.warning("GOOGLE_API_KEY is not set. RAG will fall back to mock embeddings for testing.")
+# NOTE: genai client is created lazily at call-time in _configure_genai_if_needed()
+# to pick up the key that app.py resolves from Streamlit Secrets / env vars after import.
+def _configure_genai_if_needed() -> str:
+    """Read the API key from the environment at call-time and return it. Returns empty string if missing."""
+    active_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    return active_key
+
+def _get_genai_client() -> Optional[genai.Client]:
+    """Create and return a google.genai Client using the current environment key, or None if missing."""
+    key = _configure_genai_if_needed()
+    if not key:
+        return None
+    return genai.Client(api_key=key)
 
 def format_time(seconds: float) -> str:
     """Helper to format seconds into MM:SS format."""
@@ -161,7 +169,11 @@ class HybridRAGManager:
     def _get_embeddings(self, texts: List[str]) -> np.ndarray:
         """
         Retrieves dense embeddings from Gemini API in batches of 100.
-        Falls back to random mock unit vectors if GOOGLE_API_KEY is not set.
+        Falls back to random mock unit vectors if GOOGLE_API_KEY is not available at call time.
+        
+        IMPORTANT: Reads os.environ["GOOGLE_API_KEY"] dynamically at call-time so that the
+        key set by app.py after sidebar resolution is always used — even on subsequent reruns.
+        Uses the new google.genai SDK (replaces deprecated google.generativeai).
         
         Args:
             texts (List[str]): Chunks to embed.
@@ -169,25 +181,28 @@ class HybridRAGManager:
         Returns:
             np.ndarray: Vector representations (normed).
         """
-        active_key = os.environ.get("GOOGLE_API_KEY", "").strip()
-        if not active_key:
-            logger.warning("GOOGLE_API_KEY not configured. Generating mock (random) embeddings for testing.")
+        # Always create a fresh client with the current env key (NOT the import-time constant)
+        client = _get_genai_client()
+        if client is None:
+            logger.warning("GOOGLE_API_KEY not configured at call-time. Generating mock (random) embeddings for testing.")
             arr = np.random.randn(len(texts), EMBEDDING_DIM).astype(np.float32)
             norms = np.linalg.norm(arr, axis=1, keepdims=True)
             norms[norms == 0] = 1.0
             return arr / norms
             
+        logger.info(f"[DEBUG] Embedding {len(texts)} texts using Gemini model: {GEMINI_EMBEDDING_MODEL}")
         all_embeddings = []
         batch_size = 100
         
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
-            response = genai.embed_content(
+            response = client.models.embed_content(
                 model=GEMINI_EMBEDDING_MODEL,
-                content=batch,
-                task_type="retrieval_document"
+                contents=batch
             )
-            all_embeddings.extend(response['embedding'])
+            # New SDK returns EmbedContentResponse with .embeddings list of ContentEmbedding objects
+            for emb_obj in response.embeddings:
+                all_embeddings.append(emb_obj.values)
             
         arr = np.array(all_embeddings, dtype=np.float32)
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
@@ -340,6 +355,10 @@ class HybridRAGManager:
         """
         Searches the dense FAISS vector index.
         
+        IMPORTANT: Reads os.environ["GOOGLE_API_KEY"] dynamically at call-time so that the
+        key set by app.py after sidebar resolution is always used — even on subsequent reruns.
+        Uses the new google.genai SDK (replaces deprecated google.generativeai).
+        
         Args:
             query (str): Search query.
             k (int): Number of nearest neighbors.
@@ -350,17 +369,21 @@ class HybridRAGManager:
         if self.faiss_index is None or not self.chunks:
             return []
             
+        # Always create a fresh client with the current env key (NOT the import-time constant)
+        client = _get_genai_client()
+        
         # Get query embedding
-        if not GOOGLE_API_KEY:
-            logger.warning("GOOGLE_API_KEY not configured. Generating mock (random) query embedding.")
+        if client is None:
+            logger.warning("GOOGLE_API_KEY not configured at call-time. Generating mock (random) query embedding.")
             query_emb = np.random.randn(1, EMBEDDING_DIM).astype(np.float32)
         else:
-            query_response = genai.embed_content(
+            logger.info(f"[DEBUG] Embedding query for dense_search using Gemini model: {GEMINI_EMBEDDING_MODEL}")
+            response = client.models.embed_content(
                 model=GEMINI_EMBEDDING_MODEL,
-                content=query,
-                task_type="retrieval_query"
+                contents=query
             )
-            query_emb = np.array([query_response['embedding']], dtype=np.float32)
+            # New SDK: response.embeddings is a list; first element for single-string input
+            query_emb = np.array([response.embeddings[0].values], dtype=np.float32)
         
         norm = np.linalg.norm(query_emb[0])
         if norm > 0:
@@ -574,8 +597,10 @@ class HybridRAGManager:
         context_str = "\n".join(context_blocks)
         
         # 3. Generate response using Gemini 2.5 Flash
-        if not GOOGLE_API_KEY:
-            logger.warning("GOOGLE_API_KEY is not set. Generating mock/demo answer.")
+        # Create a fresh client at call-time to pick up the key set by app.py after import
+        client = _get_genai_client()
+        if client is None:
+            logger.warning("GOOGLE_API_KEY is not set at call-time. Generating mock/demo answer.")
             summary_points = []
             for c in chunks:
                 meta = self.video_metadata_map.get(c.video_id, {})
@@ -591,7 +616,7 @@ class HybridRAGManager:
             )
             return answer, chunks
             
-        # Real LLM Call
+        # Real LLM Call using new google.genai SDK
         prompt = f"""You are an expert research assistant. Answer the following question using ONLY the provided video transcript context (which may be in different languages).
 Always respond in the language of the user's question (default: English).
 For each key claim, fact, or quote, you MUST cite the source using the exact format: [Video Title - MM:SS].
@@ -607,8 +632,10 @@ Question:
 Answer:"""
         
         try:
-            model = genai.GenerativeModel(GEMINI_LLM_MODEL)
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model=GEMINI_LLM_MODEL,
+                contents=prompt
+            )
             return response.text, chunks
         except Exception as e:
             logger.error(f"Error generating answer via Gemini: {e}")
