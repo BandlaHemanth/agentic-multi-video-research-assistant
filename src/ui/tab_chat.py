@@ -161,6 +161,7 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
             # If new chat query entered, append to state
             if not triggered_query:
                 st.session_state.chat_history.append({"role": "user", "content": active_input})
+                st.session_state["trigger_query"] = active_input
                 st.rerun()
             else:
                 # Running a triggered/regenerated query
