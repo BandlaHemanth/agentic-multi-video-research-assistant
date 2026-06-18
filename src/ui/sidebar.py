@@ -41,17 +41,39 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
     # Helper validation function
     def validate_gemini_api_key(key: str) -> bool:
         if not key or not isinstance(key, str):
+            st.session_state["api_key_error"] = "API Key cannot be empty."
             return False
         key = key.strip()
         if not key.startswith("AIzaSy") or len(key) < 30:
+            st.session_state["api_key_error"] = "Invalid key format. Key must start with 'AIzaSy' and be at least 30 characters long."
             return False
         try:
             import google.genai as google_genai
-            # Quick verification against the API using a lightweight call
+            import google.genai.errors as errors
+            import httpx
+            
             client = google_genai.Client(api_key=key)
-            client.models.get(model="gemini-2.5-flash")
+            # Call models.list() to verify key
+            client.models.list()
+            st.session_state["api_key_error"] = None
             return True
-        except Exception:
+        except errors.APIError as e:
+            logger.exception(e)
+            code = getattr(e, "code", None)
+            if code in (401, 403):
+                st.session_state["api_key_error"] = "Invalid API Key credentials (401/403)."
+            elif code == 429:
+                st.session_state["api_key_error"] = "Gemini API rate limit exceeded (429)."
+            else:
+                st.session_state["api_key_error"] = f"Gemini API error ({code}): {getattr(e, 'message', str(e))}"
+            return False
+        except httpx.RequestError as e:
+            logger.exception(e)
+            st.session_state["api_key_error"] = f"Network/Connection failure: {e}"
+            return False
+        except Exception as e:
+            logger.exception(e)
+            st.session_state["api_key_error"] = f"Validation failed: {e}"
             return False
 
     # Check for default key in Streamlit secrets or env vars
@@ -103,7 +125,8 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
                         st.session_state["api_key_override"] = ""
         
         if st.session_state.get("is_key_valid") is False:
-            st.sidebar.error("❌ Invalid API Key. Please check your credentials.")
+            err_msg = st.session_state.get("api_key_error", "Invalid API Key. Please check your credentials.")
+            st.sidebar.error(f"❌ {err_msg}")
     else:
         if st.session_state.get("api_key_override", ""):
             st.session_state["api_key_override"] = ""
