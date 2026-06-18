@@ -6,7 +6,6 @@ mounts sidebar configurations, and delegates tab content rendering.
 
 import os
 import streamlit as st
-import google.genai as google_genai
 
 # 1. Page Configuration (MUST be first Streamlit command)
 st.set_page_config(
@@ -47,30 +46,18 @@ agent = get_agent()
 sidebar_opts = render_sidebar(rag_manager)
 active_key = sidebar_opts["api_key"]
 
-# 5. Sync API key changes dynamically to environment variables and clients
+# 5. Sync API key into os.environ so agent._get_client() and rag._get_genai_client() pick it up at call-time
 import logging
 logger = logging.getLogger(__name__)
 if active_key:
-    logger.info(f"[DEBUG] Syncing active key ({st.session_state.get('active_key_source', 'unknown source')}) globally.")
-    print(f"[DEBUG] Syncing active key ({st.session_state.get('active_key_source', 'unknown source')}) globally.")
     os.environ["GOOGLE_API_KEY"] = active_key
-    import google.generativeai as genai
-    genai.configure(api_key=active_key)
-    try:
-        agent.client = google_genai.Client(api_key=active_key)
-        logger.info("[DEBUG] google.genai Client configured successfully.")
-        print("[DEBUG] google.genai Client configured successfully.")
-    except Exception as e:
-        logger.error(f"[DEBUG] Failed to configure Gemini Client: {e}")
-        print(f"[DEBUG] Failed to configure Gemini Client: {e}")
-        st.sidebar.error(f"Failed to configure Gemini Client: {e}")
-        agent.client = None
+    logger.info(f"[DEBUG] os.environ['GOOGLE_API_KEY'] set from sidebar ({st.session_state.get('active_key_source', 'unknown source')}).")
+    print(f"[DEBUG] os.environ['GOOGLE_API_KEY'] set from sidebar ({st.session_state.get('active_key_source', 'unknown source')}).")
 else:
-    logger.warning("[DEBUG] No active API key found. Clearing environment and client.")
-    print("[DEBUG] No active API key found. Clearing environment and client.")
     if "GOOGLE_API_KEY" in os.environ:
         del os.environ["GOOGLE_API_KEY"]
-    agent.client = None
+    logger.warning("[DEBUG] No active API key. Cleared os.environ['GOOGLE_API_KEY'].")
+    print("[DEBUG] No active API key. Cleared os.environ['GOOGLE_API_KEY'].")
 
 # 6. Main App Header (SaaS Premium Redesign)
 st.markdown('''
