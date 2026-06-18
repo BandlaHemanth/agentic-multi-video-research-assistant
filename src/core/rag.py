@@ -12,9 +12,8 @@ import logging
 import faiss
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
 import google.generativeai as genai
 
 from config import (
@@ -141,16 +140,17 @@ class HybridRAGManager:
         self.bm25: Optional[BM25Okapi] = None
         
         # Lazy load cross-encoder
-        self._reranker: Optional[CrossEncoder] = None
+        self._reranker: Optional[Any] = None
         
         # Load index files if they exist
         self.load_index()
 
     @property
-    def reranker(self) -> CrossEncoder:
+    def reranker(self) -> Any:
         """Lazily load the cross-encoder model to save overhead when unused."""
         if self._reranker is None:
             logger.info(f"Loading CrossEncoder reranker model: {RERANK_MODEL}")
+            from sentence_transformers import CrossEncoder
             self._reranker = CrossEncoder(RERANK_MODEL)
         return self._reranker
 
