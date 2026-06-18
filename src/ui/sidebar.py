@@ -44,8 +44,8 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
             st.session_state["api_key_error"] = "API Key cannot be empty."
             return False
         key = key.strip()
-        if not key.startswith("AIzaSy") or len(key) < 30:
-            st.session_state["api_key_error"] = "Invalid key format. Key must start with 'AIzaSy' and be at least 30 characters long."
+        if len(key) < 20:
+            st.session_state["api_key_error"] = "Invalid key length. API key must be at least 20 characters long."
             return False
         try:
             import google.genai as google_genai
@@ -53,8 +53,8 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
             import httpx
             
             client = google_genai.Client(api_key=key)
-            # Call models.list() to verify key
-            client.models.list()
+            # Call models.list() and materialize the list to fully verify key validity
+            list(client.models.list())
             st.session_state["api_key_error"] = None
             return True
         except errors.APIError as e:
@@ -98,14 +98,14 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
             override_key_input = st.text_input(
                 "Override Gemini API Key",
                 type="password",
-                placeholder="AIzaSy...",
+                placeholder="Enter Gemini API key...",
                 help="Provide your own Gemini API Key to override the default key."
             ).strip()
     else:
         override_key_input = st.sidebar.text_input(
             "Gemini API Key",
             type="password",
-            placeholder="AIzaSy...",
+            placeholder="Enter Gemini API key...",
             help="Input your Gemini API Key to enable responses."
         ).strip()
         

@@ -17,15 +17,13 @@ import sys
 import os
 import time
 
-# ─── Step 0: inject real key from CLI arg ────────────────────────────────────
 if len(sys.argv) < 2:
     print("Usage: python e2e_chat_test.py <YOUR_GEMINI_API_KEY>")
-    print("  Key must start with AIzaSy...")
     sys.exit(1)
 
 api_key = sys.argv[1].strip()
-if not api_key.startswith("AIzaSy"):
-    print(f"ERROR: Key does not start with 'AIzaSy'. Got: {api_key[:10]}...")
+if len(api_key) < 20:
+    print(f"ERROR: Key is too short. Got: {len(api_key)} chars.")
     print("This is not a valid Gemini API key.")
     sys.exit(1)
 
