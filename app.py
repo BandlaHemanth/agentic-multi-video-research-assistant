@@ -43,20 +43,24 @@ def get_agent() -> VideoResearchAgent:
 rag_manager = get_rag_manager()
 agent = get_agent()
 
-# 4. Sync API key changes to the agent client dynamically
-api_key = st.session_state.get("api_key", os.getenv("GOOGLE_API_KEY", ""))
+# 4. Render Sidebar (determines default or override active API key)
+sidebar_opts = render_sidebar(rag_manager)
+active_key = sidebar_opts["api_key"]
 
-if api_key.strip():
+# 5. Sync API key changes dynamically to environment variables and clients
+if active_key:
+    os.environ["GOOGLE_API_KEY"] = active_key
+    import google.generativeai as genai
+    genai.configure(api_key=active_key)
     try:
-        agent.client = google_genai.Client(api_key=api_key.strip())
+        agent.client = google_genai.Client(api_key=active_key)
     except Exception as e:
         st.sidebar.error(f"Failed to configure Gemini Client: {e}")
         agent.client = None
 else:
+    if "GOOGLE_API_KEY" in os.environ:
+        del os.environ["GOOGLE_API_KEY"]
     agent.client = None
-
-# 5. Render Sidebar
-sidebar_opts = render_sidebar(rag_manager)
 
 # 6. Main App Header (SaaS Premium Redesign)
 st.markdown('''
@@ -65,6 +69,10 @@ st.markdown('''
     <p style="color: #64748b; font-size: 1.1rem; font-weight: 400; margin: 0;">Search, summarize, compare and analyze video content with AI.</p>
 </div>
 ''', unsafe_allow_html=True)
+
+# Scenario D: If no key is set anywhere, display a clear, user-friendly warning message
+if not active_key:
+    st.warning("⚠️ **Gemini API Key Required**: Please configure a valid Gemini API Key in the sidebar to enable the search, chat, comparison, summary, and quiz features.")
 
 # 7. Render Layout Tabs
 tab_labels = [

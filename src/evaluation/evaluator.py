@@ -71,7 +71,8 @@ def evaluate_rag_query(
     }
     
     # 1. Run in Mock/Demo Mode if key is missing
-    if not GOOGLE_API_KEY:
+    active_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    if not active_key:
         logger.warning("GOOGLE_API_KEY not configured. Generating mock evaluation scores for testing.")
         scores.update({
             "faithfulness": 0.95 if "API" in answer or "RAG" in answer else 0.85,
@@ -107,7 +108,7 @@ def evaluate_rag_query(
         dataset = Dataset.from_dict(data)
         
         # Configure Gemini Evaluator LLM using modern Ragas InstructorLLM (llm_factory)
-        google_client = google_genai.Client(api_key=GOOGLE_API_KEY)
+        google_client = google_genai.Client(api_key=active_key)
         ragas_llm = llm_factory(
             model=RAGAS_EVAL_LLM_MODEL,  # "gemini-2.5-flash"
             provider="google",
@@ -117,7 +118,7 @@ def evaluate_rag_query(
         # Instantiate langchain embeddings and wrap it for Ragas
         langchain_embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-001",
-            google_api_key=GOOGLE_API_KEY
+            google_api_key=active_key
         )
         ragas_embeddings = LangchainEmbeddingsWrapper(langchain_embeddings)
         

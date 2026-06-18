@@ -169,7 +169,8 @@ class HybridRAGManager:
         Returns:
             np.ndarray: Vector representations (normed).
         """
-        if not GOOGLE_API_KEY:
+        active_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        if not active_key:
             logger.warning("GOOGLE_API_KEY not configured. Generating mock (random) embeddings for testing.")
             arr = np.random.randn(len(texts), EMBEDDING_DIM).astype(np.float32)
             norms = np.linalg.norm(arr, axis=1, keepdims=True)

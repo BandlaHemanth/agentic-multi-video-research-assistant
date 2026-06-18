@@ -37,24 +37,104 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
     # CARD 1: GEMINI API KEY CONFIGURATION
     # ────────────────────────────────────────────────────────────────
     st.sidebar.markdown("### 🔑 API Authentication")
-    default_key = st.session_state.get("api_key", GOOGLE_API_KEY)
     
-    api_key_input = st.sidebar.text_input(
-        "Gemini API Key",
-        type="password",
-        value=default_key,
-        placeholder="AIzaSy...",
-        help="Input your Gemini API Key to enable real responses. If empty, the app runs in fallback demo mode."
+    # Helper validation function
+    def validate_gemini_api_key(key: str) -> bool:
+        if not key or not isinstance(key, str):
+            return False
+        key = key.strip()
+        if not key.startswith("AIzaSy") or len(key) < 30:
+            return False
+        try:
+            import google.genai as google_genai
+            # Quick verification against the API using a lightweight call
+            client = google_genai.Client(api_key=key)
+            client.models.get(model="gemini-2.5-flash")
+            return True
+        except Exception:
+            return False
+
+    # Check for default key in Streamlit secrets or env vars
+    def get_default_key() -> str:
+        try:
+            if st.secrets and "GOOGLE_API_KEY" in st.secrets:
+                val = st.secrets["GOOGLE_API_KEY"]
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        except Exception:
+            pass
+        return os.getenv("GOOGLE_API_KEY", "").strip()
+
+    default_key = get_default_key()
+    has_default = bool(default_key)
+    
+    override_key_input = ""
+    
+    if has_default:
+        st.sidebar.success("✅ Default Gemini API Key Loaded")
+        with st.sidebar.expander("Use a different API key"):
+            override_key_input = st.text_input(
+                "Override Gemini API Key",
+                type="password",
+                placeholder="AIzaSy...",
+                help="Provide your own Gemini API Key to override the default key."
+            ).strip()
+    else:
+        override_key_input = st.sidebar.text_input(
+            "Gemini API Key",
+            type="password",
+            placeholder="AIzaSy...",
+            help="Input your Gemini API Key to enable responses."
+        ).strip()
+        
+    # Handle validation and session state updating
+    if override_key_input:
+        last_validated = st.session_state.get("last_validated_key", "")
+        if override_key_input != last_validated:
+            with st.sidebar:
+                with st.spinner("Validating API key..."):
+                    is_valid = validate_gemini_api_key(override_key_input)
+                    st.session_state["last_validated_key"] = override_key_input
+                    st.session_state["is_key_valid"] = is_valid
+                    if is_valid:
+                        st.session_state["api_key_override"] = override_key_input
+                        st.rerun()
+                    else:
+                        st.session_state["api_key_override"] = ""
+        
+        if st.session_state.get("is_key_valid") is False:
+            st.sidebar.error("❌ Invalid API Key. Please check your credentials.")
+    else:
+        if st.session_state.get("api_key_override", ""):
+            st.session_state["api_key_override"] = ""
+            st.session_state["last_validated_key"] = ""
+            st.session_state["is_key_valid"] = None
+            st.rerun()
+
+    # Determine current status
+    active_key = st.session_state.get("api_key_override", "").strip() or default_key
+    key_source = "user key" if st.session_state.get("api_key_override", "").strip() else ("default key" if default_key else "none")
+
+    # Render Status Card
+    if active_key:
+        status_text = "Connected using user key" if key_source == "user key" else "Connected using default key"
+        status_color = "#15803d"  # green-700
+        status_bg = "#f0fdf4"     # green-50
+        status_border = "#bbf7d0" # green-200
+    else:
+        status_text = "No API key configured"
+        status_color = "#b91c1c"  # red-700
+        status_bg = "#fef2f2"     # red-50
+        status_border = "#fecaca" # red-200
+
+    st.sidebar.markdown(
+        f'<div class="glass-card" style="background-color: {status_bg}; border: 1px solid {status_border}; padding: 12px; margin-bottom: 15px; border-radius: 12px !important;">'
+        f'  <span style="font-weight: 600; color: {status_color}; font-size: 0.85rem;">Gemini Status:</span><br>'
+        f'  <span style="color: {status_color}; font-size: 0.82rem;">{status_text}</span>'
+        f'</div>',
+        unsafe_allow_html=True
     )
     
-    # Sync environment/state changes
-    if api_key_input != st.session_state.get("api_key"):
-        st.session_state["api_key"] = api_key_input
-        os.environ["GOOGLE_API_KEY"] = api_key_input
-        import google.generativeai as genai
-        if api_key_input:
-            genai.configure(api_key=api_key_input)
-            
     st.sidebar.markdown("---")
 
     # ────────────────────────────────────────────────────────────────
@@ -254,6 +334,6 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
     )
         
     return {
-        "api_key": api_key_input,
+        "api_key": active_key,
         "debug_mode": debug_mode
     }
