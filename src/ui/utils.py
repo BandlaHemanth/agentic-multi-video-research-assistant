@@ -108,11 +108,11 @@ def is_demo_fallback_active(api_key: str, last_response: str = "") -> bool:
     Helper checking whether fallback/simulation mode is active.
     It is active if:
     1. The API key is missing.
-    2. The last response contains the '[DEMO FALLBACK]' or '[DEMO MODE]' indicators.
+    2. The last response contains the '[DEMO FALLBACK]', '[DEMO MODE]', or rate-limit fallback indicators.
     """
     if not api_key.strip():
         return True
-    if "[DEMO FALLBACK]" in last_response or "[DEMO MODE]" in last_response:
+    if "[DEMO FALLBACK]" in last_response or "[DEMO MODE]" in last_response or "Gemini API is temporarily unavailable" in last_response:
         return True
     return False
 

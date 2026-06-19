@@ -40,6 +40,7 @@ class AgentExecutionResult:
     answer: str
     retrieved_chunks: List[RetrievalChunk] = field(default_factory=list)
     trace_steps: List[AgentTraceStep] = field(default_factory=list)
+    is_fallback: bool = False
 
 
 class VideoResearchAgent:
@@ -56,6 +57,9 @@ class VideoResearchAgent:
 
     def __init__(self, rag_manager: Optional[HybridRAGManager] = None):
         self.rag_manager = rag_manager or HybridRAGManager()
+        print(f"[AGENT.__INIT__] id(self.rag_manager): {id(self.rag_manager)}")
+        print(f"[AGENT.__INIT__] len(self.rag_manager.chunks): {len(self.rag_manager.chunks)}")
+        print(f"[AGENT.__INIT__] len(self.rag_manager.video_metadata_map): {len(self.rag_manager.video_metadata_map)}")
         self.last_retrieved_chunks: List[RetrievalChunk] = []
         self.trace_steps: List[AgentTraceStep] = []
         # NOTE: No self.client here. Use _get_client() at call-time.
@@ -86,34 +90,41 @@ class VideoResearchAgent:
         """
         Executes a Gemini API function, automatically retrying with exponential backoff
         and reading wait times directly from 429/503 error responses.
+        
+        CRITICAL: If the error is HTTP 429 / RESOURCE_EXHAUSTED / quota exceeded / rate limited / 503 / UNAVAILABLE,
+        we raise it immediately so the agent falls back to local summary without retrying or waiting.
         """
         max_attempts = 5
         for attempt in range(1, max_attempts + 1):
             try:
+                # Log Gemini request start timestamp
+                print(f"[TIMING] Gemini request start at {time.time():.3f}", flush=True)
+                logger.info(f"[TIMING] Gemini request start at {time.time():.3f}")
                 return fn(*args, **kwargs)
             except Exception as e:
                 err_str = str(e)
-                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()
-                is_unavailable = "503" in err_str or "UNAVAILABLE" in err_str
+                # Log Gemini exception raised timestamp
+                print(f"[TIMING] Gemini exception raised at {time.time():.3f} — {err_str}", flush=True)
+                logger.info(f"[TIMING] Gemini exception raised at {time.time():.3f} — {err_str}")
+                
+                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower() or "rate limit" in err_str.lower()
+                is_unavailable = "503" in err_str or "UNAVAILABLE" in err_str or "unavailable" in err_str.lower()
 
-                if (is_rate_limit or is_unavailable) and attempt < max_attempts:
+                if is_rate_limit or is_unavailable:
+                    # Immediately raise the exception to switch to fallback, no retry
+                    raise e
+
+                if attempt < max_attempts:
                     # Parse retry delay
-                    wait_time = 45
-                    match = re.search(r"retry in (\d+\.?\d*)s", err_str)
-                    if match:
-                        wait_time = int(float(match.group(1))) + 2
-                    else:
-                        match_sec = re.search(r"retryDelay': '(\d+)s'", err_str)
-                        if match_sec:
-                            wait_time = int(match_sec.group(1)) + 2
-
+                    wait_time = 5
                     logger.warning(
-                        f"[Attempt {attempt}/{max_attempts}] Gemini API rate-limited/unavailable. "
+                        f"[Attempt {attempt}/{max_attempts}] Gemini API transient error. "
                         f"Waiting {wait_time}s before retrying..."
                     )
                     time.sleep(wait_time)
                 else:
                     raise e
+
 
     # ──────────────────────────────────────────────────────────────────
     # TOOL IMPLEMENTATIONS
@@ -121,7 +132,36 @@ class VideoResearchAgent:
     def _search_videos(self, query: str) -> str:
         """Helper executing RAG retrieval and accumulating context chunks."""
         logger.info(f"Tool Action: search_videos with query: '{query}'")
-        chunks = self.rag_manager.query_index(query)
+        
+        import sys, traceback
+        print(f"[{time.time():.3f}] [RUN] Step 2 hybrid search start")
+        try:
+            hybrid_candidates = self.rag_manager.hybrid_search(query)
+        except Exception as e:
+            tb = sys.exc_info()[2]
+            print(f"[RUN] Exception in hybrid search:")
+            print(f"  Filename: {tb.tb_frame.f_code.co_filename}")
+            print(f"  Line: {tb.tb_lineno}")
+            print(f"  Class: {type(e).__name__}")
+            print(f"  Message: {e}")
+            traceback.print_exc()
+            raise e
+        print(f"[{time.time():.3f}] [RUN] Step 3 hybrid search complete")
+        
+        print(f"[{time.time():.3f}] [RUN] Step 4 reranker start")
+        try:
+            chunks = self.rag_manager.rerank(query, hybrid_candidates)
+        except Exception as e:
+            tb = sys.exc_info()[2]
+            print(f"[RUN] Exception in reranker:")
+            print(f"  Filename: {tb.tb_frame.f_code.co_filename}")
+            print(f"  Line: {tb.tb_lineno}")
+            print(f"  Class: {type(e).__name__}")
+            print(f"  Message: {e}")
+            traceback.print_exc()
+            raise e
+        print(f"[{time.time():.3f}] [RUN] Step 5 reranker complete")
+        
         self.last_retrieved_chunks.extend(chunks)
 
         if not chunks:
@@ -177,11 +217,7 @@ class VideoResearchAgent:
         # Get a fresh client at call-time
         client = self._get_client()
         if not client:
-            return (
-                f"Observation: [DEMO MODE Summary for {meta.get('title', 'Video')}]: "
-                f"This video discusses key architecture blocks of the Agentic Multi-Video Research Assistant, "
-                f"detailing hybrid retrieval, dense FAISS indexing, sparse BM25 indexing, and MiniLM rerankers."
-            )
+            return self._generate_local_fallback_summary(video_id, video_chunks)
 
         prompt = (
             f"Please generate a concise, professional summary of the following video transcript. "
@@ -202,53 +238,186 @@ class VideoResearchAgent:
             return f"Observation: Error summarizing video transcript via Gemini: {e}"
 
     # ──────────────────────────────────────────────────────────────────
-    # DEMO/MOCK FALLBACK
+    # DETAILED LOCAL DETERMINISTIC FALLBACK SYSTEM (PRODUCTION-GRADE)
     # ──────────────────────────────────────────────────────────────────
-    def _run_mock_fallback(self, user_query: str) -> AgentExecutionResult:
-        """Runs a simulated ReAct loop and answer generation grounded in retrieved RAG context when API key is limited or missing."""
-        mock_chunks = self.rag_manager.query_index(user_query, limit=3)
-        self.last_retrieved_chunks.extend(mock_chunks)
-
-        video_id = mock_chunks[0].video_id if mock_chunks else "unknown"
+    def _generate_local_fallback_summary(self, video_id: str, chunks: List[RetrievalChunk]) -> str:
+        """Generates a structured, deterministic local summary from retrieved transcript chunks."""
         meta = self.rag_manager.video_metadata_map.get(video_id, {})
         title = meta.get("title", "Video")
-        uploader = meta.get("uploader", "Unknown")
+        uploader = meta.get("author", meta.get("uploader", "Unknown"))
+        duration_str = format_time(meta.get("duration", 0))
 
-        trace1 = AgentTraceStep(
+        # Filter chunks for this video
+        video_chunks = [c for c in chunks if c.video_id == video_id]
+        if not video_chunks:
+            # Fallback: get top chronological chunks for this video
+            video_chunks = [c for c in self.rag_manager.chunks if c.video_id == video_id][:5]
+
+        # Sort chunks chronologically by start_time
+        video_chunks = sorted(video_chunks, key=lambda c: c.start_time)
+
+        # Build the summary
+        summary_lines = []
+        summary_lines.append(f"### 🎥 Local Summary: {title}")
+        summary_lines.append(f"**Uploader:** {uploader} | **Duration:** {duration_str}")
+        summary_lines.append("")
+        
+        # Extract first sentence/part of the first chronological chunk or synthesize a topic line
+        first_chunk_text = video_chunks[0].text if video_chunks else ""
+        first_sentence = ""
+        if first_chunk_text:
+            sentences = re.split(r'\.\s+', first_chunk_text)
+            if sentences:
+                first_sentence = sentences[0].strip()
+        
+        summary_lines.append("#### 📌 Overall Topic")
+        if first_sentence:
+            summary_lines.append(f"Based on the transcript segments, this video discusses: *\"{first_sentence}...\"*")
+        else:
+            summary_lines.append(f"This video is an indexed presentation titled \"{title}\" uploaded by {uploader}.")
+        summary_lines.append("")
+
+        # Main Ideas & Important Details
+        summary_lines.append("#### 🔑 Main Ideas & Important Details")
+        for chunk in video_chunks:
+            start_str = format_time(chunk.start_time)
+            chunk_sentences = re.split(r'\.\s+', chunk.text)
+            cleaned_sentences = [s.strip() for s in chunk_sentences if len(s.strip()) > 10]
+            
+            if cleaned_sentences:
+                snippet = ". ".join(cleaned_sentences[:2])
+                if not snippet.endswith('.'):
+                    snippet += '.'
+                summary_lines.append(f"- **[{start_str}]** {snippet}")
+            else:
+                summary_lines.append(f"- **[{start_str}]** {chunk.text[:150]}...")
+        
+        summary_lines.append("")
+        summary_lines.append("---")
+        summary_lines.append("*⚠️ **Note:** Gemini API is temporarily unavailable or has reached its quota. Displaying a local retrieval-based summary instead.*")
+
+        return "\n".join(summary_lines)
+
+    def _generate_local_fallback_qa(self, query: str, chunks: List[RetrievalChunk]) -> str:
+        """Generates a structured, deterministic local answer for a general query from retrieved chunks."""
+        summary_lines = []
+        summary_lines.append("### 🔍 Local Retrieval-based Answer")
+        summary_lines.append(f"**Query:** \"{query}\"")
+        summary_lines.append("")
+        summary_lines.append("#### 📑 Relevant Transcript Chunks Found:")
+        
+        if not chunks:
+            summary_lines.append("No relevant transcript segments were found in the index to answer this query.")
+        else:
+            for i, chunk in enumerate(chunks[:3], 1):
+                meta = self.rag_manager.video_metadata_map.get(chunk.video_id, {})
+                title = meta.get("title", "Video")
+                start_str = format_time(chunk.start_time)
+                summary_lines.append(f"**Source {i}:** [{title} - {start_str}]")
+                summary_lines.append(f"> {chunk.text.strip()}")
+                summary_lines.append("")
+                
+        summary_lines.append("---")
+        summary_lines.append("*⚠️ **Note:** Gemini API is temporarily unavailable or has reached its quota. Displaying a local retrieval-based summary instead.*")
+        
+        return "\n".join(summary_lines)
+
+    def _run_mock_fallback(self, user_query: str) -> AgentExecutionResult:
+        """
+        Runs a local, deterministic fallback summary or QA generator grounded in retrieved context
+        when the Gemini API is rate-limited (HTTP 429), unavailable, or missing.
+        """
+        fallback_start = time.time()
+
+        video_ids = list(self.rag_manager.video_metadata_map.keys())
+        
+        if not video_ids:
+            answer = (
+                "No videos are currently indexed. Please index a video first.\n\n"
+                "*(Note: Gemini API is temporarily unavailable or has reached its quota.)*"
+            )
+            return AgentExecutionResult(answer=answer, retrieved_chunks=[], trace_steps=[], is_fallback=True)
+
+        # 1. Hybrid Retrieval Timing
+        retrieval_start = time.time()
+        try:
+            # Limit to 10 candidates before cross-encoding to optimize performance
+            hybrid_candidates = self.rag_manager.hybrid_search(user_query, top_k=10)
+        except Exception as e:
+            logger.error(f"Fallback hybrid retrieval failed: {e}")
+            hybrid_candidates = []
+        retrieval_latency = time.time() - retrieval_start
+        print(f"[TIMING] Local Hybrid Retrieval took {retrieval_latency:.4f} seconds.")
+
+        # 2. Cross-Encoder Reranking Timing
+        rerank_start = time.time()
+        try:
+            retrieved = self.rag_manager.rerank(user_query, hybrid_candidates, top_k=5)
+        except Exception as e:
+            logger.error(f"Fallback reranking failed: {e}")
+            retrieved = hybrid_candidates[:5]
+        rerank_latency = time.time() - rerank_start
+        print(f"[TIMING] Local Cross-Encoder Reranking took {rerank_latency:.4f} seconds.")
+
+        self.last_retrieved_chunks = retrieved
+
+        # 3. Summary/QA Generation Timing
+        gen_start = time.time()
+        normalized_q = re.sub(r'[^\w\s]', '', user_query.lower()).strip()
+        is_summary_req = any(x in normalized_q for x in ["summarize", "summary", "overview", "what is this video about"])
+
+        if is_summary_req:
+            selected_video_id = None
+            if len(video_ids) == 1:
+                selected_video_id = video_ids[0]
+            else:
+                for v_id in video_ids:
+                    if v_id in user_query:
+                        selected_video_id = v_id
+                        break
+                if not selected_video_id:
+                    for v_id, meta in self.rag_manager.video_metadata_map.items():
+                        title = meta.get("title", "")
+                        if title and title.lower() in user_query.lower():
+                            selected_video_id = v_id
+                            break
+                if not selected_video_id and retrieved:
+                    counts = {}
+                    for c in retrieved:
+                        counts[c.video_id] = counts.get(c.video_id, 0) + 1
+                    selected_video_id = max(counts, key=counts.get)
+            
+            if selected_video_id:
+                answer = self._generate_local_fallback_summary(selected_video_id, retrieved)
+            else:
+                clarification_msg = (
+                    "Multiple videos are currently indexed. Please clarify which video you would like to summarize:\n\n"
+                )
+                for v_id in video_ids:
+                    meta = self.rag_manager.video_metadata_map.get(v_id, {})
+                    title = meta.get("title", "Unknown Title")
+                    clarification_msg += f"- **{title}** (Video ID: `{v_id}`)\n"
+                clarification_msg += "\n*⚠️ Gemini API is temporarily unavailable or has reached its quota. Displaying a local retrieval-based summary instead.*"
+                answer = clarification_msg
+        else:
+            answer = self._generate_local_fallback_qa(user_query, retrieved)
+
+        gen_latency = time.time() - gen_start
+        print(f"[TIMING] Local Summary/QA generation took {gen_latency:.4f} seconds.")
+
+        total_latency = time.time() - fallback_start
+        print(f"[TIMING] Total local fallback execution took {total_latency:.4f} seconds.")
+
+        trace = AgentTraceStep(
             step_index=1,
-            thought="I need to search for video transcript segments related to the query.",
+            thought="Gemini API unavailable/rate-limited. Executing local hybrid search and generating deterministic response.",
             tool_name="search_videos",
             tool_args={"query": user_query},
-            observation=f"Observation: Found {len(mock_chunks)} relevant transcript segments."
+            observation=f"Observation: Found {len(retrieved)} relevant transcript segments."
         )
-        trace2 = AgentTraceStep(
-            step_index=2,
-            thought="I should also get details about the video to answer questions about the uploader or duration.",
-            tool_name="get_video_details",
-            tool_args={"video_id": video_id},
-            observation=(
-                f"Observation:\n"
-                f"  Video ID: {video_id}\n"
-                f"  Title: {title}\n"
-                f"  Uploader: {uploader}\n"
-            )
-        )
-        trace3 = AgentTraceStep(
-            step_index=3,
-            thought="I have collected all necessary search segments and video details. I will now compile the final answer.",
-            tool_name=None,
-            tool_args=None,
-            observation=None
-        )
-        self.trace_steps = [trace1, trace2, trace3]
+        self.trace_steps = [trace]
 
-        answer = (
-            f"[DEMO FALLBACK] Since the Gemini API key has hit daily quota/rate limits, "
-            f"here is the simulated agent answer grounded in retrieved content:\n\n"
-            f"According to [{title} - 00:17], the system leverages Gemini 2.5 Flash for RAG generation. "
-            f"The video uploader is '{uploader}', as shown in the video details."
-        )
-        return AgentExecutionResult(answer=answer, retrieved_chunks=mock_chunks, trace_steps=self.trace_steps)
+        return AgentExecutionResult(answer=answer, retrieved_chunks=retrieved, trace_steps=self.trace_steps, is_fallback=True)
 
     # ──────────────────────────────────────────────────────────────────
     # MAIN ENTRY POINT
@@ -260,6 +429,33 @@ class VideoResearchAgent:
 
         Always calls _get_client() to get a fresh runtime client — never uses a cached stale key.
         """
+        query = user_query
+        print("[AGENT INPUT]", query, flush=True)
+
+        print(f"[AGENT.RUN] id(self.rag_manager): {id(self.rag_manager)}")
+        print(f"[AGENT.RUN] len(self.rag_manager.chunks): {len(self.rag_manager.chunks)}")
+        print(f"[AGENT.RUN] len(self.rag_manager.video_metadata_map): {len(self.rag_manager.video_metadata_map)}")
+
+        print(len(self.rag_manager.chunks))
+        print(len(self.rag_manager.video_metadata_map))
+        print(list(self.rag_manager.video_metadata_map.keys()))
+
+        original_query = user_query
+        query_lower = user_query.lower()
+        phrases = ["indexed video", "this video", "the video", "summarize the video", "summarize the indexed video"]
+        if any(p in query_lower for p in phrases) and len(self.rag_manager.video_metadata_map) == 1:
+            single_video_id = next(iter(self.rag_manager.video_metadata_map.keys()))
+            query = f"Summarize the video with ID {single_video_id}."
+            print("[QUERY BEFORE]", original_query, flush=True)
+            print("[QUERY AFTER]", query, flush=True)
+            logger.info(f"[QUERY REWRITE] Before: '{original_query}' -> After: '{query}'")
+            user_query = query
+        else:
+            query = user_query
+
+        print("[QUERY AFTER REWRITE]", query, flush=True)
+
+        print(f"[{time.time():.3f}] [RUN] Step 1 entered")
         self.last_retrieved_chunks = []
         self.trace_steps = []
 
@@ -273,10 +469,21 @@ class VideoResearchAgent:
         if not client:
             logger.warning("[CHECKPOINT] FAIL — _get_client() returned None. GOOGLE_API_KEY missing from os.environ.")
             print("[CHECKPOINT] FAIL — _get_client() returned None. Running Demo/Mock fallback.")
+            
+            # Log Fallback entered timestamp
+            print(f"[TIMING] Fallback entered at {time.time():.3f}", flush=True)
+            logger.info(f"[TIMING] Fallback entered at {time.time():.3f}")
+            
             result = self._run_mock_fallback(user_query)
+            
+            # Log Fallback completed timestamp
+            print(f"[TIMING] Fallback completed at {time.time():.3f}", flush=True)
+            logger.info(f"[TIMING] Fallback completed at {time.time():.3f}")
+            
             elapsed = time.time() - run_start
             logger.info(f"[TIMING] agent.run() END (mock) — elapsed={elapsed:.2f}s")
             print(f"[TIMING] agent.run() END (mock) — elapsed={elapsed:.2f}s")
+            print(f"[{time.time():.3f}] [RUN] Step 9 returning AgentResult")
             return result
 
         logger.info(f"[CHECKPOINT] PASS — _get_client() returned a valid client.")
@@ -346,7 +553,7 @@ class VideoResearchAgent:
 
             try:
                 logger.info(f"[CHECKPOINT] Calling Gemini generate_content — Step {step_idx}, model={GEMINI_LLM_MODEL}")
-                print(f"[CHECKPOINT] Calling Gemini generate_content — Step {step_idx}, model={GEMINI_LLM_MODEL}")
+                print(f"[{time.time():.3f}] [RUN] Step 6 Gemini generate_content start")
 
                 response = self.call_with_retry(
                     client.models.generate_content,
@@ -355,32 +562,29 @@ class VideoResearchAgent:
                     config=config
                 )
 
+                print(f"[{time.time():.3f}] [RUN] Step 7 Gemini generate_content returned")
                 step_elapsed = time.time() - step_start
                 logger.info(f"[TIMING] ReAct Step {step_idx} Gemini call completed in {step_elapsed:.2f}s")
                 print(f"[TIMING] ReAct Step {step_idx} Gemini call completed in {step_elapsed:.2f}s")
 
             except Exception as e:
-                err_str = str(e)
-                is_rate_limit = "RESOURCE_EXHAUSTED" in err_str or "429" in err_str or "quota" in err_str.lower()
-                if is_rate_limit:
-                    logger.warning("[CHECKPOINT] FAIL — Gemini rate limit hit. Falling back to Mock/Demo Mode.")
-                    print("[CHECKPOINT] FAIL — Rate limit. Falling back to mock.")
-                    result = self._run_mock_fallback(user_query)
-                    elapsed = time.time() - run_start
-                    print(f"[TIMING] agent.run() END (rate-limit fallback) — elapsed={elapsed:.2f}s")
-                    return result
-
-                import traceback
-                tb = traceback.format_exc()
-                logger.error(f"[CHECKPOINT] FAIL — Exception in ReAct Step {step_idx}: {e}\n{tb}")
-                print(f"[CHECKPOINT] FAIL — Exception:\n{tb}")
+                logger.warning(f"[CHECKPOINT] FAIL — Gemini API call failed: {e}. Falling back to local summary.")
+                print(f"[CHECKPOINT] FAIL — Gemini API call failed. Falling back to local summary.")
+                
+                # Log Fallback entered timestamp
+                print(f"[TIMING] Fallback entered at {time.time():.3f}", flush=True)
+                logger.info(f"[TIMING] Fallback entered at {time.time():.3f}")
+                
+                result = self._run_mock_fallback(user_query)
+                
+                # Log Fallback completed timestamp
+                print(f"[TIMING] Fallback completed at {time.time():.3f}", flush=True)
+                logger.info(f"[TIMING] Fallback completed at {time.time():.3f}")
+                
                 elapsed = time.time() - run_start
-                print(f"[TIMING] agent.run() END (error) — elapsed={elapsed:.2f}s")
-                return AgentExecutionResult(
-                    answer=f"Error running agent loop: {e}",
-                    retrieved_chunks=self.last_retrieved_chunks,
-                    trace_steps=self.trace_steps
-                )
+                print(f"[TIMING] agent.run() END (fallback) — elapsed={elapsed:.2f}s")
+                print(f"[{time.time():.3f}] [RUN] Step 9 returning AgentResult")
+                return result
 
             # Extract thought
             thought = response.text or ""
@@ -441,6 +645,7 @@ class VideoResearchAgent:
                     observation=None
                 ))
 
+                print(f"[{time.time():.3f}] [RUN] Step 8 final answer assembled")
                 result = AgentExecutionResult(
                     answer=thought,
                     retrieved_chunks=self.last_retrieved_chunks,
@@ -450,12 +655,14 @@ class VideoResearchAgent:
                 elapsed = time.time() - run_start
                 logger.info(f"[TIMING] agent.run() END (success) — elapsed={elapsed:.2f}s, answer_len={len(thought)}")
                 print(f"[TIMING] agent.run() END (success) — elapsed={elapsed:.2f}s, answer_len={len(thought)}")
+                print(f"[{time.time():.3f}] [RUN] Step 9 returning AgentResult")
                 return result
 
         # Exceeded max iterations
         logger.warning("[CHECKPOINT] FAIL — ReAct loop exceeded maximum iteration limit.")
         elapsed = time.time() - run_start
         print(f"[TIMING] agent.run() END (timeout) — elapsed={elapsed:.2f}s")
+        print(f"[{time.time():.3f}] [RUN] Step 9 returning AgentResult")
         return AgentExecutionResult(
             answer="Agent execution timed out without reaching a final conclusion.",
             retrieved_chunks=self.last_retrieved_chunks,

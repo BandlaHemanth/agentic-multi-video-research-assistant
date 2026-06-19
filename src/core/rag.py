@@ -11,6 +11,7 @@ import json
 import logging
 import faiss
 import numpy as np
+import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 from rank_bm25 import BM25Okapi
@@ -152,6 +153,17 @@ class HybridRAGManager:
         
         # Load index files if they exist
         self.load_index()
+        
+        # Load reranker model asynchronously in the background so it doesn't block queries
+        import threading
+        def load_reranker_bg():
+            try:
+                _ = self.reranker
+                logger.info("Reranker model loaded successfully in background thread.")
+            except Exception as e:
+                logger.error(f"Failed to load reranker in background: {e}")
+        
+        threading.Thread(target=load_reranker_bg, daemon=True).start()
 
     @property
     def reranker(self) -> Any:
@@ -505,9 +517,31 @@ class HybridRAGManager:
         if not chunks:
             return []
             
+        # If the model isn't loaded in memory yet, don't load it synchronously during the query.
+        # Use hybrid search scores directly to keep query latency low (under 1 second).
+        if self._reranker is None:
+            logger.warning("Reranker model is not loaded in memory. Skipping rerank to preserve low latency.")
+            print("[RERANK] Warning: Reranker model is not loaded in memory. Skipping rerank to preserve latency.")
+            for chunk in chunks:
+                chunk.rerank_score = chunk.score
+            return chunks[:top_k]
+            
         pairs = [[query, chunk.text] for chunk in chunks]
+        
+        def run_prediction():
+            return self.reranker.predict(pairs)
+
         try:
-            scores = self.reranker.predict(pairs)
+            # Enforce 5-second timeout on local reranking
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_prediction)
+                scores = future.result(timeout=5.0)
+        except concurrent.futures.TimeoutError:
+            logger.warning("Reranking timed out after 5.0 seconds. Gracefully skipping rerank.")
+            print("[RERANK] Warning: Reranking exceeded 5.0 seconds timeout. Skipping rerank.")
+            for chunk in chunks:
+                chunk.rerank_score = chunk.score
+            return chunks[:top_k]
         except Exception as e:
             logger.error(f"Error executing reranking: {e}. Returning original ranking order.")
             # Set default rerank scores
@@ -522,7 +556,7 @@ class HybridRAGManager:
         sorted_chunks = sorted(chunks, key=lambda c: c.score, reverse=True)
         return sorted_chunks[:top_k]
 
-    def query_index(self, query: str, alpha: float = HYBRID_ALPHA, limit: int = RERANK_TOP_K) -> List[RetrievalChunk]:
+    def query_index(self, query: str, alpha: float = HYBRID_ALPHA, limit: int = RERANK_TOP_K, max_candidates: Optional[int] = None) -> List[RetrievalChunk]:
         """
         High-level search interface: performs hybrid retrieval followed by cross-encoder reranking.
         
@@ -530,6 +564,7 @@ class HybridRAGManager:
             query (str): User's question.
             alpha (float): dense vs sparse fusion weight.
             limit (int): Final output chunk count.
+            max_candidates (int): Optional candidate limit override.
             
         Returns:
             List[RetrievalChunk]: Reranked top-k matching transcript chunks.
@@ -541,7 +576,15 @@ class HybridRAGManager:
         logger.info(f"[DEBUG] Hybrid Search starting for query: '{query}'...")
         print(f"[DEBUG] Hybrid Search starting for query: '{query}'...")
         hybrid_start = time.time()
-        hybrid_candidates = self.hybrid_search(query, alpha=alpha, top_k=FINAL_CANDIDATES)
+        
+        if max_candidates is None:
+            key = os.environ.get("GOOGLE_API_KEY", "").strip()
+            if not key:
+                max_candidates = 10
+            else:
+                max_candidates = FINAL_CANDIDATES
+                
+        hybrid_candidates = self.hybrid_search(query, alpha=alpha, top_k=max_candidates)
         hybrid_latency = (time.time() - hybrid_start) * 1000
         logger.info(f"[DEBUG] Hybrid Search completed: found {len(hybrid_candidates)} candidates in {hybrid_latency:.2f}ms.")
         print(f"[DEBUG] Hybrid Search completed: found {len(hybrid_candidates)} candidates in {hybrid_latency:.2f}ms.")

@@ -86,6 +86,8 @@ def _execute_query(query: str, agent: VideoResearchAgent, rag_manager: HybridRAG
     _log("CHECKPOINT 5: Immediately before st.spinner(...) [PASS]")
     with st.spinner("Assistant is searching transcripts and reasoning..."):
         try:
+            prompt = query
+            print("[TAB_CHAT PROMPT]", prompt, flush=True)
             result: AgentExecutionResult = agent.run(query)
             elapsed = time.time() - run_start
             _log("agent.run() RETURNED", f"elapsed={elapsed:.2f}s, answer_len={len(result.answer)}")
@@ -139,6 +141,9 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
     """
     Renders the Chat Assistant interface.
     """
+    print(f"[TAB_CHAT.PY] id(rag_manager): {id(rag_manager)}")
+    print(f"[TAB_CHAT.PY] len(rag_manager.chunks): {len(rag_manager.chunks)}")
+    print(f"[TAB_CHAT.PY] len(rag_manager.video_metadata_map): {len(rag_manager.video_metadata_map)}")
     # 1. Fallback Mode banner
     last_answer = ""
     if "chat_history" in st.session_state and st.session_state.chat_history:
@@ -149,7 +154,7 @@ def render_chat_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager, ap
     if is_demo_fallback_active(api_key, last_answer):
         st.markdown(
             '<div class="fallback-banner">'
-            '  <span>⚠️ <strong>Gemini API unavailable. Running in DEMO FALLBACK mode.</strong></span>'
+            '  <span>⚠️ <strong>Gemini API is temporarily unavailable or has reached its quota. Displaying a local retrieval-based summary instead.</strong></span>'
             '</div>',
             unsafe_allow_html=True
         )

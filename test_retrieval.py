@@ -85,7 +85,13 @@ def main():
                 os.remove(rag_manager.metadata_file)
             rag_manager = HybridRAGManager()
             
+        print(f"[INDEXING] id(rag_manager): {id(rag_manager)}")
+        print(f"[INDEXING] len(rag_manager.chunks): {len(rag_manager.chunks)}")
+        print(f"[INDEXING] len(rag_manager.video_metadata_map): {len(rag_manager.video_metadata_map)}")
         rag_manager.add_video(video_data)
+        print(f"[INDEXING AFTER ADD] id(rag_manager): {id(rag_manager)}")
+        print(f"[INDEXING AFTER ADD] len(rag_manager.chunks): {len(rag_manager.chunks)}")
+        print(f"[INDEXING AFTER ADD] len(rag_manager.video_metadata_map): {len(rag_manager.video_metadata_map)}")
         print("[OK] Video Chunks Embedded and Indexed!")
         print(f"  - Total chunks in RAG index: {len(rag_manager.chunks)}")
     except Exception as e:

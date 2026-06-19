@@ -43,7 +43,15 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
         if not key or not isinstance(key, str):
             st.session_state["api_key_error"] = "API Key cannot be empty."
             return False
-        key = key.strip()
+        key = key.strip().strip("'").strip('"')
+        obfuscated_key = "None"
+        if key:
+            if len(key) > 8:
+                obfuscated_key = key[:4] + "..." + key[-4:]
+            else:
+                obfuscated_key = "..."
+        print(f"[VALIDATOR] Obfuscated key: {obfuscated_key}")
+        print(f"[VALIDATOR] Length: {len(key)}")
         if len(key) < 20:
             st.session_state["api_key_error"] = "Invalid key length. API key must be at least 20 characters long."
             return False
@@ -51,29 +59,25 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
             import google.genai as google_genai
             import google.genai.errors as errors
             import httpx
-            
+            import traceback
+
+            print("[VALIDATOR] Creating google.genai.Client...")
             client = google_genai.Client(api_key=key)
-            # Call models.list() and materialize the list to fully verify key validity
+            print("[VALIDATOR] Client created successfully")
+            
+            print("[VALIDATOR] Calling list(client.models.list())...")
             list(client.models.list())
+            print("[VALIDATOR] list(client.models.list()) completed successfully!")
+            
             st.session_state["api_key_error"] = None
             return True
-        except errors.APIError as e:
-            logger.exception(e)
-            code = getattr(e, "code", None)
-            if code in (401, 403):
-                st.session_state["api_key_error"] = "Invalid API Key credentials (401/403)."
-            elif code == 429:
-                st.session_state["api_key_error"] = "Gemini API rate limit exceeded (429)."
-            else:
-                st.session_state["api_key_error"] = f"Gemini API error ({code}): {getattr(e, 'message', str(e))}"
-            return False
-        except httpx.RequestError as e:
-            logger.exception(e)
-            st.session_state["api_key_error"] = f"Network/Connection failure: {e}"
-            return False
         except Exception as e:
-            logger.exception(e)
-            st.session_state["api_key_error"] = f"Validation failed: {e}"
+            import traceback
+            print("[VALIDATOR] Exception occurred:")
+            print(type(e).__name__)
+            print(str(e))
+            traceback.print_exc()
+            st.session_state["api_key_error"] = f"{type(e).__name__}: {str(e)}"
             return False
 
     # Check for default key in Streamlit secrets or env vars
@@ -82,10 +86,10 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
             if st.secrets and "GOOGLE_API_KEY" in st.secrets:
                 val = st.secrets["GOOGLE_API_KEY"]
                 if isinstance(val, str) and val.strip():
-                    return val.strip()
+                    return val.strip().strip("'").strip('"')
         except Exception:
             pass
-        return os.getenv("GOOGLE_API_KEY", "").strip()
+        return os.getenv("GOOGLE_API_KEY", "").strip().strip("'").strip('"')
 
     default_key = get_default_key()
     has_default = bool(default_key)
@@ -100,14 +104,14 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
                 type="password",
                 placeholder="Enter Gemini API key...",
                 help="Provide your own Gemini API Key to override the default key."
-            ).strip()
+            ).strip().strip("'").strip('"')
     else:
         override_key_input = st.sidebar.text_input(
             "Gemini API Key",
             type="password",
             placeholder="Enter Gemini API key...",
             help="Input your Gemini API Key to enable responses."
-        ).strip()
+        ).strip().strip("'").strip('"')
         
     # Handle validation and session state updating
     if override_key_input:

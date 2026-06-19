@@ -42,6 +42,10 @@ def get_agent() -> VideoResearchAgent:
 rag_manager = get_rag_manager()
 agent = get_agent()
 
+print(f"[APP.PY] id(rag_manager): {id(rag_manager)}")
+print(f"[APP.PY] len(rag_manager.chunks): {len(rag_manager.chunks)}")
+print(f"[APP.PY] len(rag_manager.video_metadata_map): {len(rag_manager.video_metadata_map)}")
+
 # 4. Render Sidebar (determines default or override active API key)
 sidebar_opts = render_sidebar(rag_manager)
 active_key = sidebar_opts["api_key"]
