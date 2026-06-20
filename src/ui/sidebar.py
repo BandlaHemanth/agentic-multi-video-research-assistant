@@ -171,79 +171,58 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
     
     # Single Video Form
     with st.sidebar.form("video_ingest_form", clear_on_submit=True):
-        video_url = st.text_input("YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
+        video_url = st.text_input(
+            "Paste a YouTube video URL (playlists not supported)", 
+            placeholder="Enter a single YouTube video URL"
+        )
+        st.markdown(
+            "<p style='color: #64748b; font-size: 0.8rem; margin-top: -10px; margin-bottom: 10px;'>"
+            "Note: Playlist URLs are not supported in the current version."
+            "</p>",
+            unsafe_allow_html=True
+        )
         submit_video = st.form_submit_button("Index Video")
         
     if submit_video and video_url.strip():
         url_stripped = video_url.strip()
-        with st.sidebar:
-            status_container = st.empty()
-            progress_messages = []
-            
-            def progress_cb(msg):
-                progress_messages.append(msg)
-                # Formulate visual list with checklists and spinner
-                status_container.markdown(
-                    '<div class="glass-card" style="border-left: 4px solid #7c5cfc; padding: 12px; margin-bottom: 12px; font-size: 0.85rem;">'
-                    '  <strong>Ingestion Pipeline:</strong><br>' +
-                    "<br>".join([f"✓ {m}" for m in progress_messages[:-1]] + [f"🔄 {progress_messages[-1]}"]) +
-                    '</div>',
-                    unsafe_allow_html=True
-                )
-            
-            try:
-                # 1. Metadata and Transcript retrieval (YouTube api or Whisper fallback)
-                video_data = ingest_video(url_stripped, progress_callback=progress_cb)
+        if "list=" in url_stripped:
+            st.sidebar.warning("⚠️ Playlist URLs are not supported yet. Please provide a single YouTube video URL.")
+        else:
+            with st.sidebar:
+                status_container = st.empty()
+                progress_messages = []
                 
-                # 2. Split chunking
-                progress_cb("Chunking transcript segments...")
+                def progress_cb(msg):
+                    progress_messages.append(msg)
+                    # Formulate visual list with checklists and spinner
+                    status_container.markdown(
+                        '<div class="glass-card" style="border-left: 4px solid #7c5cfc; padding: 12px; margin-bottom: 12px; font-size: 0.85rem;">'
+                        '  <strong>Ingestion Pipeline:</strong><br>' +
+                        "<br>".join([f"✓ {m}" for m in progress_messages[:-1]] + [f"🔄 {progress_messages[-1]}"]) +
+                        '</div>',
+                        unsafe_allow_html=True
+                    )
                 
-                # 3. Dense FAISS + Sparse BM25 indexing
-                progress_cb("Generating embeddings & building index...")
-                rag_manager.add_video(video_data)
-                
-                # 4. Success state
-                progress_cb("Indexing completed.")
-                
-                st.success(f"Indexed: {video_data.metadata.title[:30]}...")
-                st.toast(f"Indexed: {video_data.metadata.title[:30]}")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to ingest video: {e}")
-                logger.error(f"Video ingestion failed: {e}", exc_info=True)
-                    
-    # Playlist Form
-    with st.sidebar.form("playlist_ingest_form", clear_on_submit=True):
-        playlist_url = st.text_input("YouTube Playlist URL", placeholder="https://www.youtube.com/playlist?list=...")
-        submit_playlist = st.form_submit_button("Index Playlist")
-        
-    if submit_playlist and playlist_url.strip():
-        url_stripped = playlist_url.strip()
-        with st.sidebar:
-            with st.spinner("Extracting playlist links..."):
                 try:
-                    video_urls = extract_playlist_video_urls(url_stripped)
-                    if not video_urls:
-                        st.warning("No videos found, or blocked.")
-                    else:
-                        success_count = 0
-                        progress_bar = st.progress(0)
-                        for idx, url in enumerate(video_urls):
-                            status_msg = f"Ingesting playlist item {idx+1}/{len(video_urls)}..."
-                            with st.spinner(status_msg):
-                                try:
-                                    video_data = ingest_video(url)
-                                    rag_manager.add_video(video_data)
-                                    success_count += 1
-                                except Exception as err:
-                                    st.warning(f"Skipped URL: {url}. Error: {err}")
-                            progress_bar.progress((idx + 1) / len(video_urls))
-                        
-                        st.success(f"Indexed {success_count}/{len(video_urls)} playlist videos!")
-                        st.rerun()
+                    # 1. Metadata and Transcript retrieval (YouTube api or Whisper fallback)
+                    video_data = ingest_video(url_stripped, progress_callback=progress_cb)
+                    
+                    # 2. Split chunking
+                    progress_cb("Chunking transcript segments...")
+                    
+                    # 3. Dense FAISS + Sparse BM25 indexing
+                    progress_cb("Generating embeddings & building index...")
+                    rag_manager.add_video(video_data)
+                    
+                    # 4. Success state
+                    progress_cb("Indexing completed.")
+                    
+                    st.success(f"Indexed: {video_data.metadata.title[:30]}...")
+                    st.toast(f"Indexed: {video_data.metadata.title[:30]}")
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"Playlist extraction failed: {e}")
-                    logger.error(f"Playlist ingestion failed: {e}", exc_info=True)
+                    st.error(f"Failed to ingest video: {e}")
+                    logger.error(f"Video ingestion failed: {e}", exc_info=True)
 
     st.sidebar.markdown("---")
 
