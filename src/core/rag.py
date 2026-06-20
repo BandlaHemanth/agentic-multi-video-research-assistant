@@ -180,7 +180,7 @@ class HybridRAGManager:
 
     def _get_embeddings(self, texts: List[str]) -> np.ndarray:
         """
-        Retrieves dense embeddings from Gemini API in batches of 100.
+        Retrieves dense embeddings from Gemini API.
         Falls back to random mock unit vectors if GOOGLE_API_KEY is not available at call time.
         
         IMPORTANT: Reads os.environ["GOOGLE_API_KEY"] dynamically at call-time so that the
@@ -200,22 +200,33 @@ class HybridRAGManager:
             arr = np.random.randn(len(texts), EMBEDDING_DIM).astype(np.float32)
             norms = np.linalg.norm(arr, axis=1, keepdims=True)
             norms[norms == 0] = 1.0
+            api_requests_count = 0
+            embeddings_returned = len(texts)
+            print(f"[EMBEDDING LOG] Number of chunks: {len(texts)}", flush=True)
+            print(f"[EMBEDDING LOG] Number of API requests made: {api_requests_count}", flush=True)
+            print(f"[EMBEDDING LOG] Number of embeddings returned: {embeddings_returned}", flush=True)
+            logger.info(f"[EMBEDDING LOG] Chunks: {len(texts)}, API Requests: {api_requests_count}, Embeddings: {embeddings_returned}")
             return arr / norms
             
         logger.info(f"[DEBUG] Embedding {len(texts)} texts using Gemini model: {GEMINI_EMBEDDING_MODEL}")
         all_embeddings = []
-        batch_size = 100
+        api_requests_count = 0
         
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
+        if texts:
             response = client.models.embed_content(
                 model=GEMINI_EMBEDDING_MODEL,
-                contents=batch
+                contents=texts
             )
+            api_requests_count = 1
             # New SDK returns EmbedContentResponse with .embeddings list of ContentEmbedding objects
             for emb_obj in response.embeddings:
                 all_embeddings.append(emb_obj.values)
             
+        print(f"[EMBEDDING LOG] Number of chunks: {len(texts)}", flush=True)
+        print(f"[EMBEDDING LOG] Number of API requests made: {api_requests_count}", flush=True)
+        print(f"[EMBEDDING LOG] Number of embeddings returned: {len(all_embeddings)}", flush=True)
+        logger.info(f"[EMBEDDING LOG] Chunks: {len(texts)}, API Requests: {api_requests_count}, Embeddings: {len(all_embeddings)}")
+
         arr = np.array(all_embeddings, dtype=np.float32)
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
