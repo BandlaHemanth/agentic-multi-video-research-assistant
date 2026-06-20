@@ -122,7 +122,12 @@ def generate_quiz_from_llm(agent: VideoResearchAgent, title: str, transcript: st
     prompt = f"""You are a university professor. Generate an interactive multiple-choice quiz of exactly 5 questions based on the following video transcript.
 The quiz difficulty should be: {level}.
 
-Your response MUST be a single JSON array of objects. Do NOT wrap it in ```json code fences or markdown blocks, return ONLY the raw JSON string.
+CRITICAL INSTRUCTIONS:
+1. Generate questions based ONLY on the provided video transcript. Do not use any outside knowledge or assumptions.
+2. Do not hallucinate facts. Ensure every question and correct option is directly grounded in the text of the transcript.
+3. If information is not present in the transcript, do not generate a question about it.
+4. Your response MUST be a single JSON array of objects. Do NOT wrap it in ```json code fences or markdown blocks, return ONLY the raw JSON string.
+
 Each question object MUST have the following structure:
 {{
     "question": "Question text here?",
@@ -158,12 +163,14 @@ Transcript:
             
         questions = json.loads(text)
         if isinstance(questions, list) and len(questions) == 5:
+            print("[QUIZ DEBUG] Quiz generation: LLM generation succeeded with 5 questions.", flush=True)
             return questions
         else:
             raise ValueError("LLM did not return exactly 5 questions.")
             
     except Exception as e:
         logger.error(f"Failed to generate quiz via LLM: {e}. Falling back to default questions.")
+        print(f"[QUIZ DEBUG] Quiz generation: LLM failed due to error: {e}. Using default fallback.", flush=True)
         return DEFAULT_QUIZ_QUESTIONS.get(level, DEFAULT_QUIZ_QUESTIONS["Easy"])
 
 def render_quiz_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager):
@@ -209,9 +216,21 @@ def render_quiz_tab(agent: VideoResearchAgent, rag_manager: HybridRAGManager):
                 video_chunks = [c for c in rag_manager.chunks if c.video_id == selected_id]
                 full_transcript = " ".join([c.text for c in video_chunks])
                 
-                if not agent._get_client() or "ySEx" in selected_id or not full_transcript:
+                # Debug logging (Task 2)
+                chunks_count = len(video_chunks)
+                transcript_len = len(full_transcript)
+                client_available = agent._get_client() is not None
+                is_fallback = not client_available or not full_transcript
+                
+                print(f"[QUIZ DEBUG] Selected video ID: {selected_id}", flush=True)
+                print(f"[QUIZ DEBUG] Number of transcript chunks retrieved: {chunks_count}", flush=True)
+                print(f"[QUIZ DEBUG] Length of full_transcript: {transcript_len}", flush=True)
+                
+                if is_fallback:
+                    print("[QUIZ DEBUG] Quiz generation: Using default fallback (missing client or empty transcript)", flush=True)
                     questions = DEFAULT_QUIZ_QUESTIONS.get(difficulty, DEFAULT_QUIZ_QUESTIONS["Easy"])
                 else:
+                    print("[QUIZ DEBUG] Quiz generation: Attempting LLM generation", flush=True)
                     questions = generate_quiz_from_llm(agent, title, full_transcript, difficulty)
                     
                 st.session_state.quiz = {
