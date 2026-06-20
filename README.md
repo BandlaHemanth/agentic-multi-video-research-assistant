@@ -1,12 +1,12 @@
 # 🎬 Agentic Multi-Video Research Assistant
 
-An advanced, production-grade agentic research application designed to ingest, transcribe, index, search, and analyze multiple YouTube videos or entire playlists simultaneously. Backed by a hybrid dense-sparse RAG pipeline, local Cross-Encoder reranking, and a conversational ReAct agent loop powered by Google's Gemini 2.5 Flash.
+An advanced, production-grade agentic research application designed to ingest, transcribe, index, search, and analyze YouTube videos. Backed by a hybrid dense-sparse RAG pipeline, local Cross-Encoder reranking, and a conversational ReAct agent loop powered by Google's Gemini 2.5 Flash.
 
 ---
 
 ## 📖 Overview
 
-The **Agentic Multi-Video Research Assistant** provides researchers, students, and content creators with an automated platform to query and compare video transcripts. By combining vector semantic search (FAISS) with lexical keyword matching (BM25), the application ensures robust query retrieval. In cases where videos lack pre-existing subtitles, the engine automatically extracts the audio and transcribes it using local speech-to-text model optimization (OpenAI Whisper).
+The **Agentic Multi-Video Research Assistant** provides researchers, students, and content creators with an automated platform to query and extract insights from YouTube video transcripts. By combining vector semantic search (FAISS) with lexical keyword matching (BM25), the application ensures robust query retrieval and precise grounding. In cases where Gemini API is unavailable or rate-limited, a local fallback system is used to generate deterministic transcript-grounded answers.
 
 ---
 
@@ -16,7 +16,7 @@ The flowchart below represents the data ingestion, RAG retrieval, and agent reas
 
 ```mermaid
 graph TD
-    A[YouTube URL / Playlist] --> B(Ingestion Engine)
+    A[YouTube URL] --> B(Ingestion Engine)
     B --> C{Transcripts Available?}
     C -- Yes (EN or Original Lang) --> D[Ingest Transcripts]
     C -- No --> E[Download Audio via yt-dlp]
@@ -34,10 +34,10 @@ graph TD
     N --> O[Cited Response with Clickable Timestamps]
 ```
 
-1. **Ingestion Engine:** Fetches metadata using `yt-dlp` and checks for manual or auto-generated transcripts (English or original language) using `youtube-transcript-api`.
-2. **ASR Fallback:** If captions are disabled, it downloads the audio track and transcribes it locally using `faster-whisper`. CUDA GPU is automatically utilized with `float16` precision if available; otherwise, CPU is used with `int8` quantization.
+1. **Ingestion Engine:** Fetches metadata using `yt-dlp` and checks for manual or auto-generated transcripts using `youtube-transcript-api`.
+2. **ASR Fallback:** If captions are disabled, it downloads the audio track and transcribes it locally using `faster-whisper` (GPU float16 if available, otherwise CPU int8).
 3. **Semantic Chunking:** Groups segments into overlapping chunks keeping track of start/end timestamps.
-4. **Hybrid Indexing:** Feeds chunks to `models/gemini-embedding-001` to construct a dense vector FAISS index, and tokenizes text to build a sparse lexical BM25 index.
+4. **Hybrid Indexing:** Feeds chunks to `models/gemini-embedding-001` in a single batched call to construct a dense vector FAISS index, and tokenizes text to build a sparse lexical BM25 index.
 5. **Hybrid Retrieval:** Blends FAISS and BM25 scores using min-max scaling with a custom `alpha` factor.
 6. **Cross-Encoder Reranking:** Re-evaluates retrieval candidates using the local `ms-marco-MiniLM-L-6-v2` cross-encoder to select the top 5 most relevant grounding passages.
 7. **ReAct Agent Loop:** A conversational agent loop (`VideoResearchAgent`) executing in-context tool calls (`search_videos`, `get_video_details`, `summarize_video`) to retrieve facts, verify details, or summarize content.
@@ -47,19 +47,23 @@ graph TD
 
 ## 🌟 Core Features
 
-* **Multilingual Transcript Retrieval:** Automatically prioritizes manual English captions, auto-generated English, manual original-language, and auto original-language transcripts.
-* **ASR Speech-to-Text Fallback:** Direct speech-to-text fallback with local execution parameters displayed in the System Information sidebar.
-* **Typing Stream chat:** Aligned chat layouts with copy, feedback (like/dislike), and answer regeneration buttons.
-* **Side-by-Side Video Comparison:** Generate comparison tables grounding claims across transcripts of multiple selected videos.
-* **Summaries and Interactive Quiz Room:** Inspect metadata details and generate bulleted summaries. Challenge yourself with a dynamically generated 5-question multiple-choice quiz (grounded in transcripts) for Easy, Medium, or Hard difficulty.
-* **RAGAS Evaluation Dashboard:** Run real-time RAGAS evaluations (Faithfulness, Relevancy, Context Precision) using Gemini 2.5 Flash and track history in a visual dashboard trend chart.
+* **YouTube Video Ingestion & Transcript Extraction:** Automatically extracts manual or auto-generated transcripts. If unavailable, falls back to local Whisper ASR transcription.
+* **Hybrid RAG Pipeline:** Combines dense semantic search (FAISS) and sparse lexical search (BM25) with min-max score blending.
+* **Cross-Encoder Reranking:** Leverages the local `ms-marco-MiniLM-L-6-v2` model to rerank the top candidates and improve precision.
+* **AI Chat Assistant:** Conversational agent loop (`VideoResearchAgent`) executing ReAct reasoning with citations and clickable timestamps.
+* **Transcript-Grounded Video Summarization:** Provides comprehensive summaries structured with main topics, key points, takeaways, and notable quotes.
+* **Transcript-Grounded Quiz Generation:** Generates interactive 5-question multiple-choice quizzes strictly grounded in the video's transcript.
+* **Gemini API Key Override:** Allows users to paste their own Gemini API key in the UI settings sidebar to override the default credentials.
+* **Local Fallback when Gemini is Unavailable:** Instantly switches to a deterministic local fallback system (using hybrid search and cross-encoding) if Gemini API returns HTTP 429 rate limits or fails.
+* **Intelligent Query Rewriting:** Automatically preprocesses and rewrites vague queries (e.g., "summarize the video") to target the single indexed video.
+* **Batched Embedding Generation:** Batches all transcript chunks into a single embedding API call for improved efficiency and quota conservation.
 * **Execution Trace (Debug Mode):** Toggle debug mode to reveal intermediate steps (thoughts, tool arguments, latency, dense/sparse/rerank scores).
 
 ---
 
 ## 🛠️ Tech Stack
 
-* **Front-end UI:** Streamlit (with custom premium light-mode CSS)
+* **Front-end UI:** Streamlit (with custom premium CSS styling)
 * **AI Orchestration & Agents:** LangChain Core, Google GenAI SDK (Gemini 2.5 Flash)
 * **Embeddings:** Gemini API (`models/gemini-embedding-001`)
 * **Vector Indexing:** FAISS CPU
@@ -68,6 +72,13 @@ graph TD
 * **ASR Transcriptions:** faster-whisper, PyTorch, imageio-ffmpeg
 * **Scraping & Subtitles:** yt-dlp, youtube-transcript-api
 * **Evaluation:** Ragas, HuggingFace Datasets
+
+---
+
+## ⚠️ Known Limitations
+
+* **Playlist URLs are not currently supported:** The current version only supports single YouTube video URLs.
+* **Ingestion Failures in Cloud Deployments:** Ingesting some videos may fail on cloud environments (like Streamlit Community Cloud) due to transcript availability blocks or server audio download restrictions.
 
 ---
 
@@ -109,7 +120,7 @@ Create a `.env` file at the root of the project:
 GOOGLE_API_KEY=your_gemini_api_key_here
 WHISPER_ASR_MODEL=base
 ```
-*Note: If no Google API key is supplied, the application will run in simulated demo mode with fallback static responses.*
+*Note: If no Google API key is supplied, the application will run in local fallback mode with static and RAG-based responses.*
 
 ---
 
@@ -137,11 +148,3 @@ python test_generation.py
 # Verify agentic ReAct loop and tool calls
 python test_agent.py
 ```
-
----
-
-## 🔮 Future Work
-
-* **Multi-Modal Video Ingestion:** Supplement transcripts with visual analysis by extracting keyframes and running them through Gemini Vision models.
-* **Distributed Vector Store:** Replace local FAISS indexes with managed cloud vector databases (e.g. Pinecone, Qdrant) for high-scale multi-user production loads.
-* **Async Ingestion Pipeline:** Run ingestion tasks asynchronously using Celery and Redis to prevent blocking the Streamlit UI thread during long ASR transcription runs.
