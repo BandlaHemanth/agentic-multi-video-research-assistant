@@ -94,24 +94,40 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
     default_key = get_default_key()
     has_default = bool(default_key)
     
-    override_key_input = ""
+    def mask_key(key: str) -> str:
+        if not key:
+            return "None"
+        if len(key) >= 9:
+            return key[:5] + "..." + key[-4:]
+        return "..."
+
+    raw_override_key = ""
     
     if has_default:
         st.sidebar.success("✅ Default Gemini API Key Loaded")
         with st.sidebar.expander("Use a different API key"):
-            override_key_input = st.text_input(
+            raw_override_key = st.text_input(
                 "Override Gemini API Key",
                 type="password",
                 placeholder="Enter Gemini API key...",
                 help="Provide your own Gemini API Key to override the default key."
-            ).strip().strip("'").strip('"')
+            )
     else:
-        override_key_input = st.sidebar.text_input(
+        raw_override_key = st.sidebar.text_input(
             "Gemini API Key",
             type="password",
             placeholder="Enter Gemini API key...",
             help="Input your Gemini API Key to enable responses."
-        ).strip().strip("'").strip('"')
+        )
+
+    override_key_stripped = raw_override_key.strip() if raw_override_key else ""
+    override_key_input = override_key_stripped.replace("'", "").replace('"', "") if override_key_stripped else ""
+
+    # Print masked values at every stage (Requirement 1)
+    print(f"[DEBUG OVERRIDE] Raw st.text_input() value: {mask_key(raw_override_key)}", flush=True)
+    print(f"[DEBUG OVERRIDE] After .strip(): {mask_key(override_key_stripped)}", flush=True)
+    print(f"[DEBUG OVERRIDE] After quote removal: {mask_key(override_key_input)}", flush=True)
+    print(f"[DEBUG OVERRIDE] Value stored in st.session_state['api_key_override']: {mask_key(st.session_state.get('api_key_override'))}", flush=True)
         
     # Handle validation and session state updating
     if override_key_input:
@@ -141,6 +157,11 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
     # Determine current status
     active_key = st.session_state.get("api_key_override", "").strip() or default_key
     key_source = "user key" if st.session_state.get("api_key_override", "").strip() else ("default key" if default_key else "none")
+
+    # Print active key source (Requirement 2)
+    active_source = "OVERRIDE" if st.session_state.get("api_key_override", "").strip() else "DEFAULT"
+    print(f"[DEBUG OVERRIDE] Active key source: {active_source}", flush=True)
+
 
     # Render Status Card
     if active_key:
@@ -339,7 +360,9 @@ def render_sidebar(rag_manager: HybridRAGManager) -> Dict[str, Any]:
         unsafe_allow_html=True
     )
         
-    return {
+    ret_opts = {
         "api_key": active_key,
         "debug_mode": debug_mode
     }
+    print(f"[DEBUG OVERRIDE] Value returned by render_sidebar(): {mask_key(ret_opts['api_key'])}", flush=True)
+    return ret_opts

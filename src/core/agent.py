@@ -77,11 +77,29 @@ class VideoResearchAgent:
         uses the key that app.py resolved from Streamlit Secrets, environment
         variables, or user session overrides — not a stale import-time constant.
         """
+        def mask_key(key: str) -> str:
+            if not key:
+                return "None"
+            if len(key) >= 9:
+                return key[:5] + "..." + key[-4:]
+            return "..."
+
         key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        print(f"[DEBUG OVERRIDE] Value used inside VideoResearchAgent._get_client(): {mask_key(key)}", flush=True)
+
+        if not hasattr(self, "_cached_key") or self._cached_key != key:
+            self._cached_key = key
+            if key:
+                print(f"[DEBUG OVERRIDE] Invalidate and recreate client instance because key changed.", flush=True)
+                self._client_instance = google_genai.Client(api_key=key)
+            else:
+                self._client_instance = None
+
         if not key:
             logger.warning("[_get_client] GOOGLE_API_KEY is not set in os.environ. Will run in Demo/Mock mode.")
             return None
-        return google_genai.Client(api_key=key)
+        return self._client_instance
+
 
     # ──────────────────────────────────────────────────────────────────
     # RETRY WRAPPER

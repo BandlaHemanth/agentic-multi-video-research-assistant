@@ -46,22 +46,30 @@ print(f"[APP.PY] id(rag_manager): {id(rag_manager)}")
 print(f"[APP.PY] len(rag_manager.chunks): {len(rag_manager.chunks)}")
 print(f"[APP.PY] len(rag_manager.video_metadata_map): {len(rag_manager.video_metadata_map)}")
 
+def mask_key(key: str) -> str:
+    if not key:
+        return "None"
+    if len(key) >= 9:
+        return key[:5] + "..." + key[-4:]
+    return "..."
+
 # 4. Render Sidebar (determines default or override active API key)
 sidebar_opts = render_sidebar(rag_manager)
 active_key = sidebar_opts["api_key"]
+print(f"[DEBUG OVERRIDE] Value assigned to active_key: {mask_key(active_key)}", flush=True)
 
 # 5. Sync API key into os.environ so agent._get_client() and rag._get_genai_client() pick it up at call-time
 import logging
 logger = logging.getLogger(__name__)
 if active_key:
     os.environ["GOOGLE_API_KEY"] = active_key
+    print(f"[DEBUG OVERRIDE] Value assigned to os.environ['GOOGLE_API_KEY']: {mask_key(os.environ['GOOGLE_API_KEY'])}", flush=True)
     logger.info(f"[DEBUG] os.environ['GOOGLE_API_KEY'] set from sidebar ({st.session_state.get('active_key_source', 'unknown source')}).")
-    print(f"[DEBUG] os.environ['GOOGLE_API_KEY'] set from sidebar ({st.session_state.get('active_key_source', 'unknown source')}).")
 else:
     if "GOOGLE_API_KEY" in os.environ:
         del os.environ["GOOGLE_API_KEY"]
+    print(f"[DEBUG OVERRIDE] Value assigned to os.environ['GOOGLE_API_KEY']: None", flush=True)
     logger.warning("[DEBUG] No active API key. Cleared os.environ['GOOGLE_API_KEY'].")
-    print("[DEBUG] No active API key. Cleared os.environ['GOOGLE_API_KEY'].")
 
 # 6. Main App Header (SaaS Premium Redesign)
 st.markdown('''
